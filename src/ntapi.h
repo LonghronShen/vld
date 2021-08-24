@@ -24,8 +24,8 @@
 #pragma once
 
 #ifndef VLDBUILD
-#error \
-"This header should only be included by Visual Leak Detector when building it from source. \
+#error                                                                         \
+    "This header should only be included by Visual Leak Detector when building it from source. \
 Applications should never include this header."
 #endif
 
@@ -37,31 +37,47 @@ typedef __success(return >= 0) LONG NTSTATUS;
 
 // Unicode string structure used by NT APIs.
 struct unicodestring_t {
-    USHORT length;    // Length of the string.
-    USHORT maxlength; // Length of the buffer.
-    PWSTR  buffer;    // The buffer containing the string.
+  USHORT length;    // Length of the string.
+  USHORT maxlength; // Length of the buffer.
+  PWSTR buffer;     // The buffer containing the string.
 };
+
+#ifndef PUNICODE_STRING
+#define PUNICODE_STRING unicodestring_t *
+#endif
+
+#ifndef PANSI_STRING
+#define PANSI_STRING PUNICODE_STRING
+#endif
 
 // Function pointer types for explicit dynamic linking with functions that can't
 // be load-time linked (no import library is available for these).
-typedef NTSTATUS (__stdcall *LdrLoadDll_t) (LPWSTR, PULONG, unicodestring_t *, PHANDLE);
-typedef NTSTATUS (__stdcall *LdrLoadDllWin8_t) (DWORD_PTR, PULONG, unicodestring_t *, PHANDLE);
-typedef LPVOID (__stdcall *RtlAllocateHeap_t) (HANDLE, DWORD, SIZE_T);
-typedef BYTE (__stdcall *RtlFreeHeap_t) (HANDLE, DWORD, LPVOID);
-typedef LPVOID (__stdcall *RtlReAllocateHeap_t) (HANDLE, DWORD, LPVOID, SIZE_T);
+typedef NTSTATUS(__stdcall *LdrLoadDll_t)(LPWSTR, PULONG, unicodestring_t *,
+                                          PHANDLE);
+typedef NTSTATUS(__stdcall *LdrLoadDllWin8_t)(DWORD_PTR, PULONG,
+                                              unicodestring_t *, PHANDLE);
+typedef LPVOID(__stdcall *RtlAllocateHeap_t)(HANDLE, DWORD, SIZE_T);
+typedef BYTE(__stdcall *RtlFreeHeap_t)(HANDLE, DWORD, LPVOID);
+typedef LPVOID(__stdcall *RtlReAllocateHeap_t)(HANDLE, DWORD, LPVOID, SIZE_T);
 
-typedef NTSTATUS(NTAPI *LdrGetDllHandle_t) (PWSTR, PULONG, PUNICODE_STRING, PVOID *);
-typedef NTSTATUS(NTAPI *LdrGetProcedureAddress_t)(PVOID, PANSI_STRING, ULONG, PVOID *);
+typedef NTSTATUS(NTAPI *LdrGetDllHandle_t)(PWSTR, PULONG, unicodestring_t *,
+                                           PVOID *);
+typedef NTSTATUS(NTAPI *LdrGetProcedureAddress_t)(PVOID, unicodestring_t *,
+                                                  ULONG, PVOID *);
 typedef NTSTATUS(NTAPI *LdrUnloadDll_t)(PVOID);
 typedef NTSTATUS(NTAPI *LdrLockLoaderLock_t)(ULONG, PULONG, PULONG_PTR);
 typedef NTSTATUS(NTAPI *LdrUnlockLoaderLock_t)(ULONG, ULONG_PTR);
 
+typedef USHORT(WINAPI *RtlCaptureStackBackTrace_t)(__in ULONG, __in ULONG,
+                                                   __out PVOID *,
+                                                   __out_opt PULONG);
+
 // Provide forward declarations for the NT APIs for any source files that
 // include this header.
-extern LdrLoadDll_t        LdrLoadDll;
-extern LdrLoadDllWin8_t    LdrLoadDllWin8;
-extern RtlAllocateHeap_t   RtlAllocateHeap;
-extern RtlFreeHeap_t       RtlFreeHeap;
+extern LdrLoadDll_t LdrLoadDll;
+extern LdrLoadDllWin8_t LdrLoadDllWin8;
+extern RtlAllocateHeap_t RtlAllocateHeap;
+extern RtlFreeHeap_t RtlFreeHeap;
 extern RtlReAllocateHeap_t RtlReAllocateHeap;
 
 extern LdrGetDllHandle_t LdrGetDllHandle;
@@ -69,3 +85,8 @@ extern LdrGetProcedureAddress_t LdrGetProcedureAddress;
 extern LdrUnloadDll_t LdrUnloadDll;
 extern LdrLockLoaderLock_t LdrLockLoaderLock;
 extern LdrUnlockLoaderLock_t LdrUnlockLoaderLock;
+
+#if _WIN32_WINNT < 0x0600
+USHORT WINAPI RtlCaptureStackBackTrace(__in ULONG, __in ULONG, __out PVOID *,
+                                       __out_opt PULONG);
+#endif

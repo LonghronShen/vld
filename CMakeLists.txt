@@ -2,6 +2,16 @@ cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
 
 project(vld-proj C CXX)
 
+message(STATUS "Operation system is ${CMAKE_SYSTEM}")
+
+if("${CMAKE_SIZEOF_VOID_P}" EQUAL "8")
+  message(STATUS "Target is 64 bits")
+  set(IsX64 true)
+else()
+  message(STATUS "Target is 32 bits")
+  set(IsX64 false)
+endif()
+
 get_directory_property(hasParent PARENT_DIRECTORY)
 if(hasParent)
   message(STATUS "Has a parent scope.")
@@ -26,6 +36,8 @@ else()
 endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+
+include(BuildForWinXP)
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 

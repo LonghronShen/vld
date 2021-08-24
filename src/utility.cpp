@@ -22,26 +22,40 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
-#define VLDBUILD        // Declares that we are building Visual Leak Detector.
-#include "utility.h"    // Provides various utility functions and macros.
-#include "vldheap.h"    // Provides internal new and delete operators.
+
+#ifndef VLDBUILD
+#define VLDBUILD // Declares that we are building Visual Leak Detector.
+#endif
+
+#include "utility.h" // Provides various utility functions and macros.
+#include "vldheap.h" // Provides internal new and delete operators.
 #include "vldint.h"
-#include <tchar.h>
+
 #include <string.h>
+#include <tchar.h>
+#include <winternl.h>
+
 
 //#define PRINTHOOKINFO
 
 // Imported Global Variables
-extern ReportHookSet*   g_pReportHooks;
+extern ReportHookSet *g_pReportHooks;
 extern VisualLeakDetector g_vld;
 extern ImageDirectoryEntries g_Ide;
 
 // Global variables.
-static BOOL         s_reportDelay = FALSE;     // If TRUE, we sleep for a bit after calling OutputDebugString to give the debugger time to catch up.
-static FILE        *s_reportFile = NULL;       // Pointer to the file, if any, to send the memory leak report to.
-static BOOL         s_reportToDebugger = TRUE; // If TRUE, a copy of the memory leak report will be sent to the debugger for display.
-static BOOL         s_reportToStdOut = TRUE;   // If TRUE, a copy of the memory leak report will be sent to standard output.
-static encoding_e   s_reportEncoding = ascii;  // Output encoding of the memory leak report.
+static BOOL s_reportDelay =
+    FALSE; // If TRUE, we sleep for a bit after calling OutputDebugString to
+           // give the debugger time to catch up.
+static FILE *s_reportFile =
+    NULL; // Pointer to the file, if any, to send the memory leak report to.
+static BOOL s_reportToDebugger =
+    TRUE; // If TRUE, a copy of the memory leak report will be sent to the
+          // debugger for display.
+static BOOL s_reportToStdOut = TRUE; // If TRUE, a copy of the memory leak
+                                     // report will be sent to standard output.
+static encoding_e s_reportEncoding =
+    ascii; // Output encoding of the memory leak report.
 
 #define IS_ORDINAL(name) (((UINT_PTR)name & 0xFFFF) == ((UINT_PTR)name))
 
@@ -57,63 +71,65 @@ static encoding_e   s_reportEncoding = ascii;  // Output encoding of the memory 
 //
 //    None.
 //
-VOID DumpMemoryA (LPCVOID address, SIZE_T size)
-{
-    // Each line of output is 16 bytes.
-    SIZE_T dumpLen;
-    if ((size % 16) == 0) {
-        // No padding needed.
-        dumpLen = size;
-    }
-    else {
-        // We'll need to pad the last line out to 16 bytes.
-        dumpLen = size + (16 - (size % 16));
-    }
+VOID DumpMemoryA(LPCVOID address, SIZE_T size) {
+  // Each line of output is 16 bytes.
+  SIZE_T dumpLen;
+  if ((size % 16) == 0) {
+    // No padding needed.
+    dumpLen = size;
+  } else {
+    // We'll need to pad the last line out to 16 bytes.
+    dumpLen = size + (16 - (size % 16));
+  }
 
-    // For each byte of data, get both the ASCII equivalent (if it is a
-    // printable character) and the hex representation.
-    SIZE_T bytesDone = 0;
-    WCHAR  hexDump [HEXDUMPLINELENGTH] = {0};
-    WCHAR  ascDump [18] = {0};
-    WCHAR  formatBuf [BYTEFORMATBUFFERLENGTH];
-    for (SIZE_T byteIndex = 0; byteIndex < dumpLen; byteIndex++) {
-        SIZE_T wordIndex = byteIndex % 16;
-        SIZE_T hexIndex = 3 * (wordIndex + (wordIndex / 4)); // 3 characters per byte, plus a 3-character space after every 4 bytes.
-        SIZE_T ascIndex = wordIndex + wordIndex / 8;         // 1 character per byte, plus a 1-character space after every 8 bytes.
-        if (byteIndex < size) {
-            BYTE byte = ((PBYTE)address)[byteIndex];
-            _snwprintf_s(formatBuf, BYTEFORMATBUFFERLENGTH, _TRUNCATE, L"%.2X ", byte);
-            formatBuf[3] = '\0';
-            wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, formatBuf, 4);
-            if (isgraph(byte)) {
-                ascDump[ascIndex] = (WCHAR)byte;
-            }
-            else {
-                ascDump[ascIndex] = L'.';
-            }
-        }
-        else {
-            // Add padding to fill out the last line to 16 bytes.
-            wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, L"   ", 4);
-            ascDump[ascIndex] = L'.';
-        }
-        bytesDone++;
-        if ((bytesDone % 16) == 0) {
-            // Print one line of data for every 16 bytes. Include the
-            // ASCII dump and the hex dump side-by-side.
-            Report(L"    %s    %s\n", hexDump, ascDump);
-        }
-        else {
-            if ((bytesDone % 8) == 0) {
-                // Add a spacer in the ASCII dump after every 8 bytes.
-                ascDump[ascIndex + 1] = L' ';
-            }
-            if ((bytesDone % 4) == 0) {
-                // Add a spacer in the hex dump after every 4 bytes.
-                wcsncpy_s(hexDump + hexIndex + 3, HEXDUMPLINELENGTH - hexIndex - 3, L"   ", 4);
-            }
-        }
+  // For each byte of data, get both the ASCII equivalent (if it is a
+  // printable character) and the hex representation.
+  SIZE_T bytesDone = 0;
+  WCHAR hexDump[HEXDUMPLINELENGTH] = {0};
+  WCHAR ascDump[18] = {0};
+  WCHAR formatBuf[BYTEFORMATBUFFERLENGTH];
+  for (SIZE_T byteIndex = 0; byteIndex < dumpLen; byteIndex++) {
+    SIZE_T wordIndex = byteIndex % 16;
+    SIZE_T hexIndex =
+        3 *
+        (wordIndex + (wordIndex / 4)); // 3 characters per byte, plus a
+                                       // 3-character space after every 4 bytes.
+    SIZE_T ascIndex =
+        wordIndex + wordIndex / 8; // 1 character per byte, plus a 1-character
+                                   // space after every 8 bytes.
+    if (byteIndex < size) {
+      BYTE byte = ((PBYTE)address)[byteIndex];
+      _snwprintf_s(formatBuf, BYTEFORMATBUFFERLENGTH, _TRUNCATE, L"%.2X ",
+                   byte);
+      formatBuf[3] = '\0';
+      wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, formatBuf, 4);
+      if (isgraph(byte)) {
+        ascDump[ascIndex] = (WCHAR)byte;
+      } else {
+        ascDump[ascIndex] = L'.';
+      }
+    } else {
+      // Add padding to fill out the last line to 16 bytes.
+      wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, L"   ", 4);
+      ascDump[ascIndex] = L'.';
     }
+    bytesDone++;
+    if ((bytesDone % 16) == 0) {
+      // Print one line of data for every 16 bytes. Include the
+      // ASCII dump and the hex dump side-by-side.
+      Report(L"    %s    %s\n", hexDump, ascDump);
+    } else {
+      if ((bytesDone % 8) == 0) {
+        // Add a spacer in the ASCII dump after every 8 bytes.
+        ascDump[ascIndex + 1] = L' ';
+      }
+      if ((bytesDone % 4) == 0) {
+        // Add a spacer in the hex dump after every 4 bytes.
+        wcsncpy_s(hexDump + hexIndex + 3, HEXDUMPLINELENGTH - hexIndex - 3,
+                  L"   ", 4);
+      }
+    }
+  }
 }
 
 // DumpMemoryW - Dumps a nicely formatted rendition of a region of memory.
@@ -127,75 +143,76 @@ VOID DumpMemoryA (LPCVOID address, SIZE_T size)
 //
 //    None.
 //
-VOID DumpMemoryW (LPCVOID address, SIZE_T size)
-{
-    // Each line of output is 16 bytes.
-    SIZE_T dumpLen;
-    if ((size % 16) == 0) {
-        // No padding needed.
-        dumpLen = size;
-    }
-    else {
-        // We'll need to pad the last line out to 16 bytes.
-        dumpLen = size + (16 - (size % 16));
-    }
+VOID DumpMemoryW(LPCVOID address, SIZE_T size) {
+  // Each line of output is 16 bytes.
+  SIZE_T dumpLen;
+  if ((size % 16) == 0) {
+    // No padding needed.
+    dumpLen = size;
+  } else {
+    // We'll need to pad the last line out to 16 bytes.
+    dumpLen = size + (16 - (size % 16));
+  }
 
-    // For each word of data, get both the Unicode equivalent and the hex
-    // representation.
-    WCHAR  formatBuf [BYTEFORMATBUFFERLENGTH];
-    WCHAR  hexDump [HEXDUMPLINELENGTH] = {0};
-    WCHAR  unidump [18] = {0};
-    SIZE_T bytesDone = 0;
-    for (SIZE_T byteIndex = 0; byteIndex < dumpLen; byteIndex++) {
-        SIZE_T hexIndex = 3 * ((byteIndex % 16) + ((byteIndex % 16) / 4));   // 3 characters per byte, plus a 3-character space after every 4 bytes.
-        SIZE_T uniIndex = ((byteIndex / 2) % 8) + ((byteIndex / 2) % 8) / 8; // 1 character every other byte, plus a 1-character space after every 8 bytes.
-        if (byteIndex < size) {
-            BYTE byte = ((PBYTE)address)[byteIndex];
-            _snwprintf_s(formatBuf, BYTEFORMATBUFFERLENGTH, _TRUNCATE, L"%.2X ", byte);
-            formatBuf[BYTEFORMATBUFFERLENGTH - 1] = '\0';
-            wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, formatBuf, 4);
-            if (((byteIndex % 2) == 0) && ((byteIndex + 1) < dumpLen)) {
-                // On every even byte, print one character.
-                WORD   word = ((PWORD)address)[byteIndex / 2];
-                if ((word == 0x0000) || (word == 0x0020)) {
-                    unidump[uniIndex] = L'.';
-                }
-                else {
-                    unidump[uniIndex] = word;
-                }
-            }
+  // For each word of data, get both the Unicode equivalent and the hex
+  // representation.
+  WCHAR formatBuf[BYTEFORMATBUFFERLENGTH];
+  WCHAR hexDump[HEXDUMPLINELENGTH] = {0};
+  WCHAR unidump[18] = {0};
+  SIZE_T bytesDone = 0;
+  for (SIZE_T byteIndex = 0; byteIndex < dumpLen; byteIndex++) {
+    SIZE_T hexIndex =
+        3 * ((byteIndex % 16) +
+             ((byteIndex % 16) / 4)); // 3 characters per byte, plus a
+                                      // 3-character space after every 4 bytes.
+    SIZE_T uniIndex =
+        ((byteIndex / 2) % 8) +
+        ((byteIndex / 2) % 8) / 8; // 1 character every other byte, plus a
+                                   // 1-character space after every 8 bytes.
+    if (byteIndex < size) {
+      BYTE byte = ((PBYTE)address)[byteIndex];
+      _snwprintf_s(formatBuf, BYTEFORMATBUFFERLENGTH, _TRUNCATE, L"%.2X ",
+                   byte);
+      formatBuf[BYTEFORMATBUFFERLENGTH - 1] = '\0';
+      wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, formatBuf, 4);
+      if (((byteIndex % 2) == 0) && ((byteIndex + 1) < dumpLen)) {
+        // On every even byte, print one character.
+        WORD word = ((PWORD)address)[byteIndex / 2];
+        if ((word == 0x0000) || (word == 0x0020)) {
+          unidump[uniIndex] = L'.';
+        } else {
+          unidump[uniIndex] = word;
         }
-        else {
-            // Add padding to fill out the last line to 16 bytes.
-            wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, L"   ", 4);
-            unidump[uniIndex] = L'.';
-        }
-        bytesDone++;
-        if ((bytesDone % 16) == 0) {
-            // Print one line of data for every 16 bytes. Include the
-            // ASCII dump and the hex dump side-by-side.
-            Report(L"    %s    %s\n", hexDump, unidump);
-        }
-        else {
-            if ((bytesDone % 8) == 0) {
-                // Add a spacer in the ASCII dump after every 8 bytes.
-                unidump[uniIndex + 1] = L' ';
-            }
-            if ((bytesDone % 4) == 0) {
-                // Add a spacer in the hex dump after every 4 bytes.
-                wcsncpy_s(hexDump + hexIndex + 3, HEXDUMPLINELENGTH - hexIndex - 3, L"   ", 4);
-            }
-        }
+      }
+    } else {
+      // Add padding to fill out the last line to 16 bytes.
+      wcsncpy_s(hexDump + hexIndex, HEXDUMPLINELENGTH - hexIndex, L"   ", 4);
+      unidump[uniIndex] = L'.';
     }
+    bytesDone++;
+    if ((bytesDone % 16) == 0) {
+      // Print one line of data for every 16 bytes. Include the
+      // ASCII dump and the hex dump side-by-side.
+      Report(L"    %s    %s\n", hexDump, unidump);
+    } else {
+      if ((bytesDone % 8) == 0) {
+        // Add a spacer in the ASCII dump after every 8 bytes.
+        unidump[uniIndex + 1] = L' ';
+      }
+      if ((bytesDone % 4) == 0) {
+        // Add a spacer in the hex dump after every 4 bytes.
+        wcsncpy_s(hexDump + hexIndex + 3, HEXDUMPLINELENGTH - hexIndex - 3,
+                  L"   ", 4);
+      }
+    }
+  }
 }
 
 // FilterFunction - Used in structured exception handling
-DWORD FilterFunction(long)
-{
-    return EXCEPTION_CONTINUE_SEARCH;
-}
+DWORD FilterFunction(long) { return EXCEPTION_CONTINUE_SEARCH; }
 
-// FindOriginalImportDescriptor - Determines if the specified module imports the named import
+// FindOriginalImportDescriptor - Determines if the specified module imports the
+// named import
 //   from the named exporting module.
 //
 //  - importmodule (IN): Handle (base address) of the module to be searched to
@@ -208,39 +225,40 @@ DWORD FilterFunction(long)
 //
 //    Returns pointer to descriptor.
 //
-IMAGE_IMPORT_DESCRIPTOR* FindOriginalImportDescriptor (HMODULE importmodule, LPCSTR exportmodulename)
-{
-    IMAGE_IMPORT_DESCRIPTOR* idte = NULL;
-    IMAGE_SECTION_HEADER*    section = NULL;
-    ULONG                    size = 0;
+IMAGE_IMPORT_DESCRIPTOR *FindOriginalImportDescriptor(HMODULE importmodule,
+                                                      LPCSTR exportmodulename) {
+  IMAGE_IMPORT_DESCRIPTOR *idte = NULL;
+  IMAGE_SECTION_HEADER *section = NULL;
+  ULONG size = 0;
 
-    // Locate the importing module's Import Directory Table (IDT) entry for the
-    // exporting module. The importing module actually can have several IATs --
-    // one for each export module that it imports something from. The IDT entry
-    // gives us the offset of the IAT for the module we are interested in.
-    {
-        idte = (IMAGE_IMPORT_DESCRIPTOR*)g_Ide.ImageDirectoryEntryToDataEx((PVOID)GetCallingModule((UINT_PTR)importmodule), TRUE,
-            IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section);
-    }
+  // Locate the importing module's Import Directory Table (IDT) entry for the
+  // exporting module. The importing module actually can have several IATs --
+  // one for each export module that it imports something from. The IDT entry
+  // gives us the offset of the IAT for the module we are interested in.
+  {
+    idte = (IMAGE_IMPORT_DESCRIPTOR *)g_Ide.ImageDirectoryEntryToDataEx(
+        (PVOID)GetCallingModule((UINT_PTR)importmodule), TRUE,
+        IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section);
+  }
 
-    if (idte == NULL) {
-        // This module has no IDT (i.e. it imports nothing).
-        return NULL;
+  if (idte == NULL) {
+    // This module has no IDT (i.e. it imports nothing).
+    return NULL;
+  }
+  while (idte->OriginalFirstThunk != 0x0) {
+    PCHAR name = (PCHAR)R2VA(importmodule, idte->Name);
+    if (_stricmp(name, exportmodulename) == 0) {
+      // Found the IDT entry for the exporting module.
+      break;
     }
-    while (idte->OriginalFirstThunk != 0x0) {
-        PCHAR name = (PCHAR)R2VA(importmodule, idte->Name);
-        if (_stricmp(name, exportmodulename) == 0) {
-            // Found the IDT entry for the exporting module.
-            break;
-        }
-        idte++;
-    }
-    if (idte->OriginalFirstThunk == 0x0) {
-        // The importing module does not import anything from the exporting
-        // module.
-        return NULL;
-    }
-    return idte;
+    idte++;
+  }
+  if (idte->OriginalFirstThunk == 0x0) {
+    // The importing module does not import anything from the exporting
+    // module.
+    return NULL;
+  }
+  return idte;
 }
 
 // FindImport - Determines if the specified module imports the named import
@@ -264,44 +282,48 @@ IMAGE_IMPORT_DESCRIPTOR* FindOriginalImportDescriptor (HMODULE importmodule, LPC
 //    Returns TRUE if the module imports to the specified import. Otherwise
 //    returns FALSE.
 //
-BOOL FindImport (HMODULE importmodule, HMODULE exportmodule, LPCSTR exportmodulename, LPCSTR importname)
-{
-    IMAGE_IMPORT_DESCRIPTOR *idte;
-    IMAGE_THUNK_DATA        *iate;
-    FARPROC                  import;
+BOOL FindImport(HMODULE importmodule, HMODULE exportmodule,
+                LPCSTR exportmodulename, LPCSTR importname) {
+  IMAGE_IMPORT_DESCRIPTOR *idte;
+  IMAGE_THUNK_DATA *iate;
+  FARPROC import;
 
-    DbgTrace(L"dbghelp32.dll %i: FindImport - ImageDirectoryEntryToDataEx\n", GetCurrentThreadId());
-    idte = FindOriginalImportDescriptor(importmodule, exportmodulename);
-    if (idte == NULL)
-        return FALSE;
-
-    // Get the *real* address of the import. If we find this address in the IAT,
-    // then we've found that the module does import the named import.
-    import = GetProcAddress(exportmodule, importname);
-
-    // Perhaps the named export module does not actually export the named import?
-    //assert(import != NULL);   - on my Windows 7 x64, VS 9 SP1, Win x32 project assertion failure will cause new DLL loading, and then infinite loop of calls to findimport() and stack overflow. Maybe it's caused by antivirus, nevertheless this solution fixes infinite loop
-    if ( import == NULL )    // - instead of assert
-    {
-        OutputDebugStringW(__FUNCTIONW__ L"(" __FILEW__ L") : import == NULL\n" );
-        if ( ::IsDebuggerPresent() )
-            __debugbreak();
-
-        return FALSE;
-    }
-
-    // Locate the import's IAT entry.
-    iate = (IMAGE_THUNK_DATA*)R2VA(importmodule, idte->FirstThunk);
-    while (iate->u1.Function != 0x0) {
-        if (iate->u1.Function == (DWORD_PTR)import) {
-            // Found the IAT entry. The module imports the named import.
-            return TRUE;
-        }
-        iate++;
-    }
-
-    // The module does not import the named import.
+  DbgTrace(L"dbghelp32.dll %i: FindImport - ImageDirectoryEntryToDataEx\n",
+           GetCurrentThreadId());
+  idte = FindOriginalImportDescriptor(importmodule, exportmodulename);
+  if (idte == NULL)
     return FALSE;
+
+  // Get the *real* address of the import. If we find this address in the IAT,
+  // then we've found that the module does import the named import.
+  import = GetProcAddress(exportmodule, importname);
+
+  // Perhaps the named export module does not actually export the named import?
+  // assert(import != NULL);   - on my Windows 7 x64, VS 9 SP1, Win x32 project
+  // assertion failure will cause new DLL loading, and then infinite loop of
+  // calls to findimport() and stack overflow. Maybe it's caused by antivirus,
+  // nevertheless this solution fixes infinite loop
+  if (import == NULL) // - instead of assert
+  {
+    OutputDebugStringW(__FUNCTIONW__ L"(" __FILEW__ L") : import == NULL\n");
+    if (::IsDebuggerPresent())
+      __debugbreak();
+
+    return FALSE;
+  }
+
+  // Locate the import's IAT entry.
+  iate = (IMAGE_THUNK_DATA *)R2VA(importmodule, idte->FirstThunk);
+  while (iate->u1.Function != 0x0) {
+    if (iate->u1.Function == (DWORD_PTR)import) {
+      // Found the IAT entry. The module imports the named import.
+      return TRUE;
+    }
+    iate++;
+  }
+
+  // The module does not import the named import.
+  return FALSE;
 }
 
 // FindPatch - Determines if the specified module has been patched to use the
@@ -322,38 +344,37 @@ BOOL FindImport (HMODULE importmodule, HMODULE exportmodule, LPCSTR exportmodule
 //    Returns TRUE if the module has been patched to use the specified
 //    replacement export.
 //
-BOOL FindPatch (HMODULE importmodule, moduleentry_t *module)
-{
-    IMAGE_IMPORT_DESCRIPTOR *idte;
+BOOL FindPatch(HMODULE importmodule, moduleentry_t *module) {
+  IMAGE_IMPORT_DESCRIPTOR *idte;
 
-    idte = FindOriginalImportDescriptor(importmodule, module->exportModuleName);
-    if (idte == NULL)
-        return FALSE;
-
-    int i = 0;
-    patchentry_t *entry = module->patchTable;
-    while(entry->importName)
-    {
-        LPCVOID replacement = entry->replacement;
-
-        IMAGE_THUNK_DATA        *iate;
-
-        // Locate the replacement's IAT entry.
-        iate = (IMAGE_THUNK_DATA*)R2VA(importmodule, idte->FirstThunk);
-        while (iate->u1.Function != 0x0) {
-            if (iate->u1.Function == (DWORD_PTR)replacement) {
-                // Found the IAT entry for the replacement. This patch has been
-                // installed.
-                return TRUE;
-            }
-            iate++;
-        }
-        entry++; i++;
-    }
-
-    // The module does not import the replacement. The patch has not been
-    // installed.
+  idte = FindOriginalImportDescriptor(importmodule, module->exportModuleName);
+  if (idte == NULL)
     return FALSE;
+
+  int i = 0;
+  patchentry_t *entry = module->patchTable;
+  while (entry->importName) {
+    LPCVOID replacement = entry->replacement;
+
+    IMAGE_THUNK_DATA *iate;
+
+    // Locate the replacement's IAT entry.
+    iate = (IMAGE_THUNK_DATA *)R2VA(importmodule, idte->FirstThunk);
+    while (iate->u1.Function != 0x0) {
+      if (iate->u1.Function == (DWORD_PTR)replacement) {
+        // Found the IAT entry for the replacement. This patch has been
+        // installed.
+        return TRUE;
+      }
+      iate++;
+    }
+    entry++;
+    i++;
+  }
+
+  // The module does not import the replacement. The patch has not been
+  // installed.
+  return FALSE;
 }
 
 // InsertReportDelay - Sets the report function to sleep for a bit after each
@@ -363,31 +384,32 @@ BOOL FindPatch (HMODULE importmodule, moduleentry_t *module)
 //
 //    None.
 //
-VOID InsertReportDelay ()
-{
-    s_reportDelay = TRUE;
-}
+VOID InsertReportDelay() { s_reportDelay = TRUE; }
 
 // ConvertModulePathToAscii - Convert module path to ascii encoding.
-void ConvertModulePathToAscii( LPCWSTR modulename, LPSTR * modulenamea )
-{
-	size_t length = ::WideCharToMultiByte(CP_ACP, 0, modulename, -1, 0, 0, 0, 0);
-	*modulenamea = new CHAR [length];
+void ConvertModulePathToAscii(LPCWSTR modulename, LPSTR *modulenamea) {
+  size_t length = ::WideCharToMultiByte(CP_ACP, 0, modulename, -1, 0, 0, 0, 0);
+  *modulenamea = new CHAR[length];
 
-	// wcstombs_s requires locale to be already set up correctly, but it might not be correct on vld init step. So use WideCharToMultiByte instead
-	CHAR defaultChar     = '?';
-	BOOL defaultCharUsed = FALSE;
+  // wcstombs_s requires locale to be already set up correctly, but it might not
+  // be correct on vld init step. So use WideCharToMultiByte instead
+  CHAR defaultChar = '?';
+  BOOL defaultCharUsed = FALSE;
 
-	int count = ::WideCharToMultiByte(CP_ACP, 0/*flags*/, modulename, (int)-1, *modulenamea, (int)length, &defaultChar, &defaultCharUsed);
-	assert(count != 0);
-	if ( defaultCharUsed )
-	{
-		::OutputDebugStringW(__FILEW__ L": " __FUNCTIONW__ L" - defaultChar was used while conversion from \"");
-		::OutputDebugStringW(modulename);
-		::OutputDebugStringW(L"\" to ANSI \"");
-		::OutputDebugStringA(*modulenamea);
-		::OutputDebugStringW(L"\". Result can be wrong.\n");
-	}
+  int count = ::WideCharToMultiByte(CP_ACP, 0 /*flags*/, modulename, (int)-1,
+                                    *modulenamea, (int)length, &defaultChar,
+                                    &defaultCharUsed);
+  assert(count != 0);
+  if (defaultCharUsed) {
+    ::OutputDebugStringW(
+        __FILEW__ L":"
+                  L" " __FUNCTIONW__ L" - defaultChar was used while "
+                                     L"conversion from \"");
+    ::OutputDebugStringW(modulename);
+    ::OutputDebugStringW(L"\" to ANSI \"");
+    ::OutputDebugStringA(*modulenamea);
+    ::OutputDebugStringW(L"\". Result can be wrong.\n");
+  }
 }
 
 // IsModulePatched - Checks to see if any of the imports listed in the specified
@@ -406,54 +428,52 @@ void ConvertModulePathToAscii( LPCWSTR modulename, LPSTR * modulenamea )
 //    Returns TRUE if at least one of the patches listed in the patch table is
 //    installed in the importmodule. Otherwise returns FALSE.
 //
-BOOL IsModulePatched (HMODULE importmodule, moduleentry_t patchtable [], UINT tablesize)
-{
-    // Loop through the import patch table, individually checking each patch
-    // entry to see if it is installed in the import module. If any patch entry
-    // is installed in the import module, then the module has been patched.
-    BOOL found = FALSE;
-    for (UINT index = 0; index < tablesize; index++) {
-        moduleentry_t *entry = &patchtable[index];
-        found = FindPatch(importmodule, entry);
-        if (found) {
-            // Found one of the listed patches installed in the import module.
-            return TRUE;
-        }
+BOOL IsModulePatched(HMODULE importmodule, moduleentry_t patchtable[],
+                     UINT tablesize) {
+  // Loop through the import patch table, individually checking each patch
+  // entry to see if it is installed in the import module. If any patch entry
+  // is installed in the import module, then the module has been patched.
+  BOOL found = FALSE;
+  for (UINT index = 0; index < tablesize; index++) {
+    moduleentry_t *entry = &patchtable[index];
+    found = FindPatch(importmodule, entry);
+    if (found) {
+      // Found one of the listed patches installed in the import module.
+      return TRUE;
     }
+  }
 
-    // No patches listed in the patch table were found in the import module.
-    return FALSE;
+  // No patches listed in the patch table were found in the import module.
+  return FALSE;
 }
 
-LPVOID FindRealCode(LPVOID pCode)
-{
-    LPVOID result = pCode;
-    if (pCode != NULL)
+LPVOID FindRealCode(LPVOID pCode) {
+  LPVOID result = pCode;
+  if (pCode != NULL) {
+    if (*(WORD *)pCode == 0x25ff) // JMP r/m32
     {
-        if (*(WORD *)pCode == 0x25ff) // JMP r/m32
-        {
 #ifdef _WIN64
-            LONG offset = *((LONG *)((ULONG_PTR)pCode + 2));
-            // RIP relative addressing
-            PBYTE pNextInst = (PBYTE)((ULONG_PTR)pCode + 6);
-            pCode = *(LPVOID*)(pNextInst + offset);
-            return pCode;
+      LONG offset = *((LONG *)((ULONG_PTR)pCode + 2));
+      // RIP relative addressing
+      PBYTE pNextInst = (PBYTE)((ULONG_PTR)pCode + 6);
+      pCode = *(LPVOID *)(pNextInst + offset);
+      return pCode;
 #else
-            DWORD addr = *((DWORD *)((ULONG_PTR)pCode + 2));
-            pCode = *(LPVOID*)(addr);
-            return FindRealCode(pCode);
+      DWORD addr = *((DWORD *)((ULONG_PTR)pCode + 2));
+      pCode = *(LPVOID *)(addr);
+      return FindRealCode(pCode);
 #endif
-        }
-        if (*(BYTE *)pCode == 0xE9) // JMP rel32
-        {
-            // Relative next instruction
-            PBYTE	pNextInst = (PBYTE)((ULONG_PTR)pCode + 5);
-            LONG	offset = *((LONG *)((ULONG_PTR)pCode + 1));
-            pCode = (LPVOID*)(pNextInst + offset);
-            return FindRealCode(pCode);
-        }
     }
-    return result;
+    if (*(BYTE *)pCode == 0xE9) // JMP rel32
+    {
+      // Relative next instruction
+      PBYTE pNextInst = (PBYTE)((ULONG_PTR)pCode + 5);
+      LONG offset = *((LONG *)((ULONG_PTR)pCode + 1));
+      pCode = (LPVOID *)(pNextInst + offset);
+      return FindRealCode(pCode);
+    }
+  }
+  return result;
 }
 
 // PatchImport - Patches all future calls to an imported function, or references
@@ -486,143 +506,145 @@ LPVOID FindRealCode(LPVOID pCode)
 //    import module does not import the specified export, so nothing changed,
 //    then FALSE will be returned.
 //
-BOOL PatchImport (HMODULE importmodule, moduleentry_t *patchModule)
-{
-    HMODULE exportmodule = (HMODULE)patchModule->moduleBase;
-    if (exportmodule == NULL)
-        return FALSE;
+BOOL PatchImport(HMODULE importmodule, moduleentry_t *patchModule) {
+  HMODULE exportmodule = (HMODULE)patchModule->moduleBase;
+  if (exportmodule == NULL)
+    return FALSE;
 
-    IMAGE_IMPORT_DESCRIPTOR *idte = NULL;
-    IMAGE_SECTION_HEADER    *section = NULL;
-    ULONG                    size = 0;
+  IMAGE_IMPORT_DESCRIPTOR *idte = NULL;
+  IMAGE_SECTION_HEADER *section = NULL;
+  ULONG size = 0;
 
-    // Locate the importing module's Import Directory Table (IDT) entry for the
-    // exporting module. The importing module actually can have several IATs --
-    // one for each export module that it imports something from. The IDT entry
-    // gives us the offset of the IAT for the module we are interested in.
-    {
-        idte = (IMAGE_IMPORT_DESCRIPTOR*)g_Ide.ImageDirectoryEntryToDataEx((PVOID)GetCallingModule((UINT_PTR)importmodule), TRUE,
-            IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section);
-    }
+  // Locate the importing module's Import Directory Table (IDT) entry for the
+  // exporting module. The importing module actually can have several IATs --
+  // one for each export module that it imports something from. The IDT entry
+  // gives us the offset of the IAT for the module we are interested in.
+  {
+    idte = (IMAGE_IMPORT_DESCRIPTOR *)g_Ide.ImageDirectoryEntryToDataEx(
+        (PVOID)GetCallingModule((UINT_PTR)importmodule), TRUE,
+        IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section);
+  }
 
-    if (idte == NULL) {
-        // This module has no IDT (i.e. it imports nothing).
-        return FALSE;
-    }
+  if (idte == NULL) {
+    // This module has no IDT (i.e. it imports nothing).
+    return FALSE;
+  }
 #ifdef PRINTHOOKINFO
-	bool dllNamePrinted = false;
-	CHAR  cwBuffer[2048] = { 0 };
-	LPSTR pszBuffer = cwBuffer;
-	DWORD dwMaxChars = _countof(cwBuffer);
-	DWORD dwLength = ::GetModuleFileNameA(importmodule, pszBuffer, dwMaxChars);
+  bool dllNamePrinted = false;
+  CHAR cwBuffer[2048] = {0};
+  LPSTR pszBuffer = cwBuffer;
+  DWORD dwMaxChars = _countof(cwBuffer);
+  DWORD dwLength = ::GetModuleFileNameA(importmodule, pszBuffer, dwMaxChars);
 #endif
 
-    int result = 0;
-    while (idte->FirstThunk != 0x0) {
-        PCHAR importdllname = (PCHAR)R2VA(importmodule, idte->Name);
-        UNREFERENCED_PARAMETER(importdllname);
+  int result = 0;
+  while (idte->FirstThunk != 0x0) {
+    PCHAR importdllname = (PCHAR)R2VA(importmodule, idte->Name);
+    UNREFERENCED_PARAMETER(importdllname);
 
-        patchentry_t *patchEntry = patchModule->patchTable;
-        int i = 0;
-        while(patchEntry->importName)
-        {
-            LPCSTR importname   = patchEntry->importName;
-            LPCVOID replacement = patchEntry->replacement;
+    patchentry_t *patchEntry = patchModule->patchTable;
+    int i = 0;
+    while (patchEntry->importName) {
+      LPCSTR importname = patchEntry->importName;
+      LPCVOID replacement = patchEntry->replacement;
 
-            // Get the *real* address of the import. If we find this address in the IAT,
-            // then we've found the entry that needs to be patched.
-            LPVOID import = VisualLeakDetector::_RGetProcAddress(exportmodule, importname);
-            if ( !import)
-                import = GetProcAddress(exportmodule, importname);
-            import = FindRealCode(import);
+      // Get the *real* address of the import. If we find this address in the
+      // IAT, then we've found the entry that needs to be patched.
+      LPVOID import =
+          VisualLeakDetector::_RGetProcAddress(exportmodule, importname);
+      if (!import)
+        import = GetProcAddress(exportmodule, importname);
+      import = FindRealCode(import);
 
-            if (import == NULL) // Perhaps the named export module does not actually export the named import?
-            {
-                patchEntry++; i++;
-                continue;
-            }
+      if (import == NULL) // Perhaps the named export module does not actually
+                          // export the named import?
+      {
+        patchEntry++;
+        i++;
+        continue;
+      }
 
-            // Locate the import's IAT entry.
-            IMAGE_THUNK_DATA *thunk = (IMAGE_THUNK_DATA*)R2VA(importmodule, idte->FirstThunk);
-            IMAGE_THUNK_DATA *origThunk = (IMAGE_THUNK_DATA*)R2VA(importmodule, idte->OriginalFirstThunk);
-            for (; origThunk->u1.Function != NULL;
-                origThunk++, thunk++)
-            {
-                LPVOID func = FindRealCode((LPVOID)thunk->u1.Function);
-                if (((DWORD_PTR)func == (DWORD_PTR)import))
-                {
-                    // Found the IAT entry. Overwrite the address stored in the IAT
-                    // entry with the address of the replacement. Note that the IAT
-                    // entry may be write-protected, so we must first ensure that it is
-                    // writable.
-                    if (import != replacement)
-                    {
-                        if (patchEntry->original != NULL)
-                            *patchEntry->original = func;
+      // Locate the import's IAT entry.
+      IMAGE_THUNK_DATA *thunk =
+          (IMAGE_THUNK_DATA *)R2VA(importmodule, idte->FirstThunk);
+      IMAGE_THUNK_DATA *origThunk =
+          (IMAGE_THUNK_DATA *)R2VA(importmodule, idte->OriginalFirstThunk);
+      for (; origThunk->u1.Function != NULL; origThunk++, thunk++) {
+        LPVOID func = FindRealCode((LPVOID)thunk->u1.Function);
+        if (((DWORD_PTR)func == (DWORD_PTR)import)) {
+          // Found the IAT entry. Overwrite the address stored in the IAT
+          // entry with the address of the replacement. Note that the IAT
+          // entry may be write-protected, so we must first ensure that it is
+          // writable.
+          if (import != replacement) {
+            if (patchEntry->original != NULL)
+              *patchEntry->original = func;
 
-                        DWORD protect;
-                        if (VirtualProtect(&thunk->u1.Function, sizeof(thunk->u1.Function), PAGE_EXECUTE_READWRITE, &protect)) {
-                            thunk->u1.Function = (DWORD_PTR)replacement;
-                            if (VirtualProtect(&thunk->u1.Function, sizeof(thunk->u1.Function), protect, &protect)) {
+            DWORD protect;
+            if (VirtualProtect(&thunk->u1.Function, sizeof(thunk->u1.Function),
+                               PAGE_EXECUTE_READWRITE, &protect)) {
+              thunk->u1.Function = (DWORD_PTR)replacement;
+              if (VirtualProtect(&thunk->u1.Function,
+                                 sizeof(thunk->u1.Function), protect,
+                                 &protect)) {
 #ifdef PRINTHOOKINFO
-                                if (!IS_ORDINAL(importname)) {
-                                    DbgReport(L"Hook dll \"%S\" import %S!%S()\n",
-                                        strrchr(pszBuffer, '\\') + 1, patchModule->exportModuleName, importname);
-                                } else {
-                                    DbgReport(L"Hook dll \"%S\" import %S!%zu()\n",
-                                        strrchr(pszBuffer, '\\') + 1, patchModule->exportModuleName, importname);
-                                }
-#endif
-                            }
-                        }
-                    }
-                    // The patch has been installed in the import module.
-                    result++;
-                    break;
-                }
-#ifdef PRINTHOOKINFO
-                PIMAGE_IMPORT_BY_NAME funcEntry = (PIMAGE_IMPORT_BY_NAME)
-                    R2VA(importmodule, origThunk->u1.AddressOfData);
-                if (stricmp(importdllname, patchModule->exportModuleName) == 0)
-                {
-                    if (!(origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) && !IS_ORDINAL(importname) &&
-                        strcmp(reinterpret_cast<const char*>(funcEntry->Name), importname) == 0)
-                    {
-                        if (!dllNamePrinted)
-                        {
-                            dllNamePrinted = true;
-                            DbgReport(L"Hook dll \"%S\":\n",
-                                strrchr(pszBuffer, '\\') + 1);
-                        }
-                        DbgReport(L"Import found %S(\"%S\") for dll \"%S\".\n",
-                            importname, patchModule->exportModuleName, importdllname);
-                        break;
-                    }
-                    if ((origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) && IS_ORDINAL(importname) &&
-                        (IMAGE_ORDINAL(origThunk->u1.Ordinal) == (UINT_PTR)importname))
-                    {
-                        if (!dllNamePrinted)
-                        {
-                            dllNamePrinted = true;
-                            DbgReport(L"Hook dll \"%S\":\n",
-                                strrchr(pszBuffer, '\\') + 1);
-                        }
-                        DbgReport(L"Import found %zu(\"%S\") for dll \"%S\".\n",
-                            importname, patchModule->exportModuleName, importdllname);
-                        break;
-                    }
+                if (!IS_ORDINAL(importname)) {
+                  DbgReport(L"Hook dll \"%S\" import %S!%S()\n",
+                            strrchr(pszBuffer, '\\') + 1,
+                            patchModule->exportModuleName, importname);
+                } else {
+                  DbgReport(L"Hook dll \"%S\" import %S!%zu()\n",
+                            strrchr(pszBuffer, '\\') + 1,
+                            patchModule->exportModuleName, importname);
                 }
 #endif
+              }
             }
-            patchEntry++; i++;
+          }
+          // The patch has been installed in the import module.
+          result++;
+          break;
         }
-
-        idte++;
+#ifdef PRINTHOOKINFO
+        PIMAGE_IMPORT_BY_NAME funcEntry = (PIMAGE_IMPORT_BY_NAME)R2VA(
+            importmodule, origThunk->u1.AddressOfData);
+        if (stricmp(importdllname, patchModule->exportModuleName) == 0) {
+          if (!(origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) &&
+              !IS_ORDINAL(importname) &&
+              strcmp(reinterpret_cast<const char *>(funcEntry->Name),
+                     importname) == 0) {
+            if (!dllNamePrinted) {
+              dllNamePrinted = true;
+              DbgReport(L"Hook dll \"%S\":\n", strrchr(pszBuffer, '\\') + 1);
+            }
+            DbgReport(L"Import found %S(\"%S\") for dll \"%S\".\n", importname,
+                      patchModule->exportModuleName, importdllname);
+            break;
+          }
+          if ((origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG) &&
+              IS_ORDINAL(importname) &&
+              (IMAGE_ORDINAL(origThunk->u1.Ordinal) == (UINT_PTR)importname)) {
+            if (!dllNamePrinted) {
+              dllNamePrinted = true;
+              DbgReport(L"Hook dll \"%S\":\n", strrchr(pszBuffer, '\\') + 1);
+            }
+            DbgReport(L"Import found %zu(\"%S\") for dll \"%S\".\n", importname,
+                      patchModule->exportModuleName, importdllname);
+            break;
+          }
+        }
+#endif
+      }
+      patchEntry++;
+      i++;
     }
 
-    // The import's IAT entry was not found. The importing module does not
-    // import the specified import.
-    return result > 0;
+    idte++;
+  }
+
+  // The import's IAT entry was not found. The importing module does not
+  // import the specified import.
+  return result > 0;
 }
 
 // PatchModule - Patches all imports listed in the supplied patch table, and
@@ -645,43 +667,43 @@ BOOL PatchImport (HMODULE importmodule, moduleentry_t *patchModule)
 //    Returns TRUE if at least one of the patches listed in the patch table was
 //    installed in the importmodule. Otherwise returns FALSE.
 //
-BOOL PatchModule (HMODULE importmodule, moduleentry_t patchtable [], UINT tablesize)
-{
-    moduleentry_t *entry;
-    UINT          index;
-    BOOL          patched = FALSE;
+BOOL PatchModule(HMODULE importmodule, moduleentry_t patchtable[],
+                 UINT tablesize) {
+  moduleentry_t *entry;
+  UINT index;
+  BOOL patched = FALSE;
 
 #ifdef PRINTHOOKINFO
-    CHAR  cwBuffer[2048] = { 0 };
-    LPSTR pszBuffer = cwBuffer;
-    DWORD dwMaxChars = _countof(cwBuffer);
-    DWORD dwLength = ::GetModuleFileNameA(importmodule, pszBuffer, dwMaxChars);
+  CHAR cwBuffer[2048] = {0};
+  LPSTR pszBuffer = cwBuffer;
+  DWORD dwMaxChars = _countof(cwBuffer);
+  DWORD dwLength = ::GetModuleFileNameA(importmodule, pszBuffer, dwMaxChars);
 #endif
 
-    // Loop through the import patch table, individually patching each import
-    // listed in the table.
-    DbgTrace(L"dbghelp32.dll %i: PatchModule - ImageDirectoryEntryToDataEx\n", GetCurrentThreadId());
-    for (index = 0; index < tablesize; index++) {
-        entry = &patchtable[index];
-        if (PatchImport(importmodule, entry)) {
-            patched = TRUE;
-        }
+  // Loop through the import patch table, individually patching each import
+  // listed in the table.
+  DbgTrace(L"dbghelp32.dll %i: PatchModule - ImageDirectoryEntryToDataEx\n",
+           GetCurrentThreadId());
+  for (index = 0; index < tablesize; index++) {
+    entry = &patchtable[index];
+    if (PatchImport(importmodule, entry)) {
+      patched = TRUE;
     }
+  }
 
-    return patched;
+  return patched;
 }
 
-int CallReportHook(int reportType, LPWSTR message, int* hook_retval)
-{
-    if (g_pReportHooks == NULL)
-        return 0;
-    for (ReportHookSet::Iterator it = g_pReportHooks->begin(); it != g_pReportHooks->end(); ++it)
-    {
-        int result = (*it)(reportType, message, hook_retval);
-        if (result) // handled
-            return result;
-    }
+int CallReportHook(int reportType, LPWSTR message, int *hook_retval) {
+  if (g_pReportHooks == NULL)
     return 0;
+  for (ReportHookSet::Iterator it = g_pReportHooks->begin();
+       it != g_pReportHooks->end(); ++it) {
+    int result = (*it)(reportType, message, hook_retval);
+    if (result) // handled
+      return result;
+  }
+  return 0;
 }
 
 // Print - Sends a message to the debugger for display
@@ -696,52 +718,50 @@ int CallReportHook(int reportType, LPWSTR message, int* hook_retval)
 //
 //    None.
 //
-VOID Print (LPWSTR messagew)
-{
-    if (NULL == messagew)
+VOID Print(LPWSTR messagew) {
+  if (NULL == messagew)
+    return;
+
+  int hook_retval = 0;
+  if (!CallReportHook(0, messagew, &hook_retval)) {
+    if (s_reportEncoding == unicode) {
+      if (s_reportFile != NULL) {
+        // Send the report to the previously specified file.
+        fwrite(messagew, sizeof(WCHAR), wcslen(messagew), s_reportFile);
+      }
+
+      if (s_reportToStdOut)
+        fputws(messagew, stdout);
+    } else {
+      const size_t MAXMESSAGELENGTH = 5119;
+      size_t count = 0;
+      CHAR messagea[MAXMESSAGELENGTH + 1];
+      if (wcstombs_s(&count, messagea, MAXMESSAGELENGTH + 1, messagew,
+                     _TRUNCATE) != 0) {
+        // Failed to convert the Unicode message to ASCII.
+        assert(FALSE);
         return;
+      }
+      messagea[MAXMESSAGELENGTH] = '\0';
 
-    int hook_retval=0;
-    if (!CallReportHook(0, messagew, &hook_retval))
-    {
-        if (s_reportEncoding == unicode) {
-            if (s_reportFile != NULL) {
-                // Send the report to the previously specified file.
-                fwrite(messagew, sizeof(WCHAR), wcslen(messagew), s_reportFile);
-            }
+      if (s_reportFile != NULL) {
+        // Send the report to the previously specified file.
+        fwrite(messagea, sizeof(CHAR), strlen(messagea), s_reportFile);
+      }
 
-            if ( s_reportToStdOut )
-                fputws(messagew, stdout);
-        }
-        else {
-            const size_t MAXMESSAGELENGTH = 5119;
-            size_t  count = 0;
-            CHAR    messagea [MAXMESSAGELENGTH + 1];
-            if (wcstombs_s(&count, messagea, MAXMESSAGELENGTH + 1, messagew, _TRUNCATE) != 0) {
-                // Failed to convert the Unicode message to ASCII.
-                assert(FALSE);
-                return;
-            }
-            messagea[MAXMESSAGELENGTH] = '\0';
-
-            if (s_reportFile != NULL) {
-                // Send the report to the previously specified file.
-                fwrite(messagea, sizeof(CHAR), strlen(messagea), s_reportFile);
-            }
-
-            if ( s_reportToStdOut )
-                fputs(messagea, stdout);
-		}
-
-		if (s_reportToDebugger)
-			OutputDebugStringW(messagew);
+      if (s_reportToStdOut)
+        fputs(messagea, stdout);
     }
-    else if (hook_retval == 1)
-        __debugbreak();
 
-    if (s_reportToDebugger && (s_reportDelay)) {
-        Sleep(10); // Workaround the Visual Studio 6 bug where debug strings are sometimes lost if they're sent too fast.
-    }
+    if (s_reportToDebugger)
+      OutputDebugStringW(messagew);
+  } else if (hook_retval == 1)
+    __debugbreak();
+
+  if (s_reportToDebugger && (s_reportDelay)) {
+    Sleep(10); // Workaround the Visual Studio 6 bug where debug strings are
+               // sometimes lost if they're sent too fast.
+  }
 }
 
 // Report - Sends a printf-style formatted message to the debugger for display
@@ -759,18 +779,18 @@ VOID Print (LPWSTR messagew)
 //
 //    None.
 //
-VOID Report (LPCWSTR format, ...)
-{
-    va_list args;
-    WCHAR   messagew [MAXREPORTLENGTH + 1];
+VOID Report(LPCWSTR format, ...) {
+  va_list args;
+  WCHAR messagew[MAXREPORTLENGTH + 1];
 
-    va_start(args, format);
-    int result = _vsnwprintf_s(messagew, MAXREPORTLENGTH + 1, _TRUNCATE, format, args);
-    va_end(args);
-    messagew[MAXREPORTLENGTH] = L'\0';
+  va_start(args, format);
+  int result =
+      _vsnwprintf_s(messagew, MAXREPORTLENGTH + 1, _TRUNCATE, format, args);
+  va_end(args);
+  messagew[MAXREPORTLENGTH] = L'\0';
 
-    if (result >= 0)
-        Print(messagew);
+  if (result >= 0)
+    Print(messagew);
 }
 
 // RestoreImport - Restores the IAT entry for an import previously patched via
@@ -796,102 +816,105 @@ VOID Report (LPCWSTR format, ...)
 //
 //    None.
 //
-VOID RestoreImport (HMODULE importmodule, moduleentry_t* module)
-{
-    HMODULE exportmodule = (HMODULE)module->moduleBase;
-    LPCSTR exportmodulename = module->exportModuleName;
-    UNREFERENCED_PARAMETER(exportmodulename);
-    if (exportmodule == NULL)
-        return;
+VOID RestoreImport(HMODULE importmodule, moduleentry_t *module) {
+  HMODULE exportmodule = (HMODULE)module->moduleBase;
+  LPCSTR exportmodulename = module->exportModuleName;
+  UNREFERENCED_PARAMETER(exportmodulename);
+  if (exportmodule == NULL)
+    return;
 
-    IMAGE_IMPORT_DESCRIPTOR *idte = NULL;
-    IMAGE_SECTION_HEADER    *section = NULL;
-    ULONG                    size = 0;
+  IMAGE_IMPORT_DESCRIPTOR *idte = NULL;
+  IMAGE_SECTION_HEADER *section = NULL;
+  ULONG size = 0;
 
-    // Locate the importing module's Import Directory Table (IDT) entry for the
-    // exporting module. The importing module actually can have several IATs --
-    // one for each export module that it imports something from. The IDT entry
-    // gives us the offset of the IAT for the module we are interested in.
-    {
-        idte = (IMAGE_IMPORT_DESCRIPTOR*)g_Ide.ImageDirectoryEntryToDataEx((PVOID)GetCallingModule((UINT_PTR)importmodule), TRUE,
-            IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section);
-    }
+  // Locate the importing module's Import Directory Table (IDT) entry for the
+  // exporting module. The importing module actually can have several IATs --
+  // one for each export module that it imports something from. The IDT entry
+  // gives us the offset of the IAT for the module we are interested in.
+  {
+    idte = (IMAGE_IMPORT_DESCRIPTOR *)g_Ide.ImageDirectoryEntryToDataEx(
+        (PVOID)GetCallingModule((UINT_PTR)importmodule), TRUE,
+        IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section);
+  }
 
-    if (idte == NULL) {
-        // This module has no IDT (i.e. it imports nothing).
-        return;
-    }
+  if (idte == NULL) {
+    // This module has no IDT (i.e. it imports nothing).
+    return;
+  }
 
 #ifdef PRINTHOOKINFO
-    bool dllNamePrinted = false;
-    CHAR  cwBuffer[2048] = { 0 };
-    LPSTR pszBuffer = cwBuffer;
-    DWORD dwMaxChars = _countof(cwBuffer);
-    DWORD dwLength = ::GetModuleFileNameA(importmodule, pszBuffer, dwMaxChars);
+  bool dllNamePrinted = false;
+  CHAR cwBuffer[2048] = {0};
+  LPSTR pszBuffer = cwBuffer;
+  DWORD dwMaxChars = _countof(cwBuffer);
+  DWORD dwLength = ::GetModuleFileNameA(importmodule, pszBuffer, dwMaxChars);
 #endif
 
-    int result = 0;
-    while (idte->OriginalFirstThunk != 0x0)
-    {
-        PCHAR name = (PCHAR)R2VA(importmodule, idte->Name);
-        UNREFERENCED_PARAMETER(name);
+  int result = 0;
+  while (idte->OriginalFirstThunk != 0x0) {
+    PCHAR name = (PCHAR)R2VA(importmodule, idte->Name);
+    UNREFERENCED_PARAMETER(name);
 
-        int i = 0;
-        patchentry_t *entry = module->patchTable;
-        while(entry->importName)
-        {
-            LPCSTR importname   = entry->importName;
-            LPCVOID replacement = entry->replacement;
-            UNREFERENCED_PARAMETER(importname);
+    int i = 0;
+    patchentry_t *entry = module->patchTable;
+    while (entry->importName) {
+      LPCSTR importname = entry->importName;
+      LPCVOID replacement = entry->replacement;
+      UNREFERENCED_PARAMETER(importname);
 
-            // Get the *real* address of the import.
-            //LPCVOID original = entry->original;
-            LPCVOID original = g_vld._RGetProcAddress(exportmodule, importname);
-            if (original == NULL) // Perhaps the named export module does not actually export the named import?
-            {
-                entry++; i++;
-                continue;
-            }
+      // Get the *real* address of the import.
+      // LPCVOID original = entry->original;
+      LPCVOID original = g_vld._RGetProcAddress(exportmodule, importname);
+      if (original == NULL) // Perhaps the named export module does not actually
+                            // export the named import?
+      {
+        entry++;
+        i++;
+        continue;
+      }
 
-            // Locate the import's original IAT entry (it currently has the replacement
-            // address in it).
-            IMAGE_THUNK_DATA* iate = (IMAGE_THUNK_DATA*)R2VA(importmodule, idte->FirstThunk);
-            while (iate->u1.Function != 0x0)
-            {
-                if (iate->u1.Function != (DWORD_PTR)replacement)
-                {
-                    iate++;
-                    continue;
-                }
-
-                if (iate->u1.Function != (DWORD_PTR)original)
-                {
-                    // Found the IAT entry. Overwrite the address stored in the IAT
-                    // entry with the import's real address. Note that the IAT entry may
-                    // be write-protected, so we must first ensure that it is writable.
-                    DWORD protect;
-                    if (VirtualProtect(&iate->u1.Function, sizeof(iate->u1.Function), PAGE_EXECUTE_READWRITE, &protect)) {
-                        iate->u1.Function = (DWORD_PTR)original;
-                        if (VirtualProtect(&iate->u1.Function, sizeof(iate->u1.Function), protect, &protect)) {
-#ifdef PRINTHOOKINFO
-                            if (!IS_ORDINAL(importname)) {
-                                DbgReport(L"UnHook dll \"%S\" import %S!%S()\n",
-                                    strrchr(pszBuffer, '\\') + 1, module->exportModuleName, importname);
-                            } else {
-                                DbgReport(L"UnHook dll \"%S\" import %S!%zu()\n",
-                                    strrchr(pszBuffer, '\\') + 1, module->exportModuleName, importname);
-                            }
-#endif
-                        }
-                    }
-                }
-                result++;
-                iate++;
-            }
-            entry++; i++;
+      // Locate the import's original IAT entry (it currently has the
+      // replacement address in it).
+      IMAGE_THUNK_DATA *iate =
+          (IMAGE_THUNK_DATA *)R2VA(importmodule, idte->FirstThunk);
+      while (iate->u1.Function != 0x0) {
+        if (iate->u1.Function != (DWORD_PTR)replacement) {
+          iate++;
+          continue;
         }
-        idte++;
+
+        if (iate->u1.Function != (DWORD_PTR)original) {
+          // Found the IAT entry. Overwrite the address stored in the IAT
+          // entry with the import's real address. Note that the IAT entry may
+          // be write-protected, so we must first ensure that it is writable.
+          DWORD protect;
+          if (VirtualProtect(&iate->u1.Function, sizeof(iate->u1.Function),
+                             PAGE_EXECUTE_READWRITE, &protect)) {
+            iate->u1.Function = (DWORD_PTR)original;
+            if (VirtualProtect(&iate->u1.Function, sizeof(iate->u1.Function),
+                               protect, &protect)) {
+#ifdef PRINTHOOKINFO
+              if (!IS_ORDINAL(importname)) {
+                DbgReport(L"UnHook dll \"%S\" import %S!%S()\n",
+                          strrchr(pszBuffer, '\\') + 1,
+                          module->exportModuleName, importname);
+              } else {
+                DbgReport(L"UnHook dll \"%S\" import %S!%zu()\n",
+                          strrchr(pszBuffer, '\\') + 1,
+                          module->exportModuleName, importname);
+              }
+#endif
+            }
+          }
+        }
+        result++;
+        iate++;
+      }
+      entry++;
+      i++;
     }
+    idte++;
+  }
 }
 
 // RestoreModule - Restores all imports listed in the supplied patch table, and
@@ -912,18 +935,19 @@ VOID RestoreImport (HMODULE importmodule, moduleentry_t* module)
 //
 //    None.
 //
-VOID RestoreModule (HMODULE importmodule, moduleentry_t patchtable [], UINT tablesize)
-{
-    moduleentry_t *entry;
-    UINT          index;
+VOID RestoreModule(HMODULE importmodule, moduleentry_t patchtable[],
+                   UINT tablesize) {
+  moduleentry_t *entry;
+  UINT index;
 
-    // Loop through the import patch table, individually restoring each import
-    // listed in the table.
-    DbgTrace(L"dbghelp32.dll %i: RestoreModule - ImageDirectoryEntryToDataEx\n", GetCurrentThreadId());
-    for (index = 0; index < tablesize; index++) {
-        entry = &patchtable[index];
-        RestoreImport(importmodule, entry);
-    }
+  // Loop through the import patch table, individually restoring each import
+  // listed in the table.
+  DbgTrace(L"dbghelp32.dll %i: RestoreModule - ImageDirectoryEntryToDataEx\n",
+           GetCurrentThreadId());
+  for (index = 0; index < tablesize; index++) {
+    entry = &patchtable[index];
+    RestoreImport(importmodule, entry);
+  }
 }
 
 // SetReportEncoding - Sets the output encoding of report messages to either
@@ -935,17 +959,16 @@ VOID RestoreModule (HMODULE importmodule, moduleentry_t patchtable [], UINT tabl
 //
 //    None.
 //
-VOID SetReportEncoding (encoding_e encoding)
-{
-    switch (encoding) {
-    case ascii:
-    case unicode:
-        s_reportEncoding = encoding;
-        break;
+VOID SetReportEncoding(encoding_e encoding) {
+  switch (encoding) {
+  case ascii:
+  case unicode:
+    s_reportEncoding = encoding;
+    break;
 
-    default:
-        assert(FALSE);
-    }
+  default:
+    assert(FALSE);
+  }
 }
 
 // SetReportFile - Sets a destination file to which all report messages should
@@ -963,19 +986,19 @@ VOID SetReportEncoding (encoding_e encoding)
 //
 //    None.
 //
-VOID SetReportFile (FILE *file, BOOL copydebugger, BOOL tostdout)
-{
-    s_reportFile = file;
-    s_reportToDebugger = copydebugger;
-    s_reportToStdOut = tostdout;
+VOID SetReportFile(FILE *file, BOOL copydebugger, BOOL tostdout) {
+  s_reportFile = file;
+  s_reportToDebugger = copydebugger;
+  s_reportToStdOut = tostdout;
 }
 
-// AppendString - Appends the specified source string to the specified destination
+// AppendString - Appends the specified source string to the specified
+// destination
 //   string. Allocates additional space so that the destination string "grows"
 //   as new strings are appended to it. This is accomplished by deleting the
 //   destination string after the new longer string is gets the copied contents
-//   of the destination and additional text. This function is fairly infrequently
-//   used so efficiency is not a major concern.
+//   of the destination and additional text. This function is fairly
+//   infrequently used so efficiency is not a major concern.
 //
 //  - dest (IN): Address of the destination string. Receives the resulting
 //      combined string after the append operation.
@@ -986,18 +1009,16 @@ VOID SetReportFile (FILE *file, BOOL copydebugger, BOOL tostdout)
 //
 //    The new concatenated string.
 //
-LPWSTR AppendString (LPWSTR dest, LPCWSTR source)
-{
-    if ((source == NULL) || (source[0] == '\0'))
-    {
-        return dest;
-    }
-    SIZE_T length = wcslen(dest) + wcslen(source);
-    LPWSTR new_str = new WCHAR [length + 1];
-    wcsncpy_s(new_str, length + 1, dest, _TRUNCATE);
-    wcsncat_s(new_str, length + 1, source, _TRUNCATE);
-    delete [] dest;
-    return new_str;
+LPWSTR AppendString(LPWSTR dest, LPCWSTR source) {
+  if ((source == NULL) || (source[0] == '\0')) {
+    return dest;
+  }
+  SIZE_T length = wcslen(dest) + wcslen(source);
+  LPWSTR new_str = new WCHAR[length + 1];
+  wcsncpy_s(new_str, length + 1, dest, _TRUNCATE);
+  wcsncat_s(new_str, length + 1, source, _TRUNCATE);
+  delete[] dest;
+  return new_str;
 }
 
 // StrToBool - Converts string values (e.g. "yes", "no", "on", "off") to boolean
@@ -1010,18 +1031,15 @@ LPWSTR AppendString (LPWSTR dest, LPCWSTR source)
 //    Returns TRUE if the string is recognized as a "true" string. Otherwise
 //    returns FALSE.
 //
-BOOL StrToBool (LPCWSTR s) {
-    WCHAR *end;
+BOOL StrToBool(LPCWSTR s) {
+  WCHAR *end;
 
-    if ((_wcsicmp(s, L"true") == 0) ||
-        (_wcsicmp(s, L"yes") == 0) ||
-        (_wcsicmp(s, L"on") == 0) ||
-        (wcstol(s, &end, 10) == 1)) {
-        return TRUE;
-    }
-    else {
-        return FALSE;
-    }
+  if ((_wcsicmp(s, L"true") == 0) || (_wcsicmp(s, L"yes") == 0) ||
+      (_wcsicmp(s, L"on") == 0) || (wcstol(s, &end, 10) == 1)) {
+    return TRUE;
+  } else {
+    return FALSE;
+  }
 }
 
 // _GetProcessIdOfThread - Returns the ID of the process owns the thread.
@@ -1032,54 +1050,54 @@ BOOL StrToBool (LPCWSTR s) {
 //
 //    Returns the ID of the process that owns the thread. Otherwise returns 0.
 //
-DWORD _GetProcessIdOfThread (HANDLE thread)
-{
-    typedef struct _CLIENT_ID {
-        HANDLE UniqueProcess;
-        HANDLE UniqueThread;
-    } CLIENT_ID, *PCLIENT_ID;
+DWORD _GetProcessIdOfThread(HANDLE thread) {
+  typedef struct _CLIENT_ID {
+    HANDLE UniqueProcess;
+    HANDLE UniqueThread;
+  } CLIENT_ID, *PCLIENT_ID;
 
-    typedef LONG NTSTATUS;
-    typedef LONG KPRIORITY;
+  typedef LONG NTSTATUS;
+  typedef LONG KPRIORITY;
 
-    typedef struct _THREAD_BASIC_INFORMATION {
-        NTSTATUS  ExitStatus;
-        PVOID     TebBaseAddress;
-        CLIENT_ID ClientId;
-        KAFFINITY AffinityMask;
-        KPRIORITY Priority;
-        KPRIORITY BasePriority;
-    } THREAD_BASIC_INFORMATION, *PTHREAD_BASIC_INFORMATION;
+  typedef struct _THREAD_BASIC_INFORMATION {
+    NTSTATUS ExitStatus;
+    PVOID TebBaseAddress;
+    CLIENT_ID ClientId;
+    KAFFINITY AffinityMask;
+    KPRIORITY Priority;
+    KPRIORITY BasePriority;
+  } THREAD_BASIC_INFORMATION, *PTHREAD_BASIC_INFORMATION;
 
-    const static THREADINFOCLASS ThreadBasicInformation = (THREADINFOCLASS)0;
+  const static THREADINFOCLASS ThreadBasicInformation = (THREADINFOCLASS)0;
 
-    typedef NTSTATUS (WINAPI *PNtQueryInformationThread) (HANDLE thread,
-        THREADINFOCLASS infoclass, PVOID buffer, ULONG buffersize,
-        PULONG used);
+  typedef NTSTATUS(WINAPI * PNtQueryInformationThread)(
+      HANDLE thread, THREADINFOCLASS infoclass, PVOID buffer, ULONG buffersize,
+      PULONG used);
 
-    static PNtQueryInformationThread NtQueryInformationThread = NULL;
+  static PNtQueryInformationThread NtQueryInformationThread = NULL;
 
-    THREAD_BASIC_INFORMATION tbi;
-    NTSTATUS status;
+  THREAD_BASIC_INFORMATION tbi;
+  NTSTATUS status;
+  if (NtQueryInformationThread == NULL) {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+      NtQueryInformationThread = (PNtQueryInformationThread)GetProcAddress(
+          ntdll, "NtQueryInformationThread");
+    }
+
     if (NtQueryInformationThread == NULL) {
-        HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-        if (ntdll)
-        {
-            NtQueryInformationThread = (PNtQueryInformationThread)GetProcAddress(ntdll, "NtQueryInformationThread");
-        }
-
-        if (NtQueryInformationThread == NULL) {
-            return 0;
-        }
+      return 0;
     }
+  }
 
-    status = NtQueryInformationThread(thread, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
-    if(status < 0) {
-        // Shall we go through all the trouble of setting last error?
-        return 0;
-    }
+  status = NtQueryInformationThread(thread, ThreadBasicInformation, &tbi,
+                                    sizeof(tbi), NULL);
+  if (status < 0) {
+    // Shall we go through all the trouble of setting last error?
+    return 0;
+  }
 
-    return (DWORD)tbi.ClientId.UniqueProcess;
+  return (DWORD)tbi.ClientId.UniqueProcess;
 }
 
 static const DWORD crctab[256] = {
@@ -1128,41 +1146,33 @@ static const DWORD crctab[256] = {
     0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d,
 };
 
-DWORD CalculateCRC32(UINT_PTR p, UINT startValue)
-{
-    register DWORD hash = startValue;
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >>  0) & 0xff)];
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >>  8) & 0xff)];
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 16) & 0xff)];
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 24) & 0xff)];
+DWORD CalculateCRC32(UINT_PTR p, UINT startValue) {
+  register DWORD hash = startValue;
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 0) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 8) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 16) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 24) & 0xff)];
 #ifdef WIN64
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 32) & 0xff)];
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 40) & 0xff)];
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 48) & 0xff)];
-    hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 56) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 32) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 40) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 48) & 0xff)];
+  hash = (hash >> 8) ^ crctab[(hash & 0xff) ^ ((p >> 56) & 0xff)];
 #endif
-    return hash;
+  return hash;
 }
 
 // Formats a message string using the specified message and variable
 // list of arguments.
-void GetFormattedMessage(DWORD last_error)
-{
-    // Retrieve the system error message for the last-error code
-    WCHAR lpMsgBuf[MAX_PATH] = {0};
+void GetFormattedMessage(DWORD last_error) {
+  // Retrieve the system error message for the last-error code
+  WCHAR lpMsgBuf[MAX_PATH] = {0};
 
-    FormatMessage(
-        FORMAT_MESSAGE_FROM_SYSTEM |
-        FORMAT_MESSAGE_IGNORE_INSERTS,
-        NULL,
-        last_error,
-        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        lpMsgBuf,
-        MAX_PATH,
-        NULL );
+  FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                NULL, last_error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                lpMsgBuf, MAX_PATH, NULL);
 
-    // Display the error message.
-    Report(L"%s", lpMsgBuf);
+  // Display the error message.
+  Report(L"%s", lpMsgBuf);
 }
 
 // GetCallingModule - Return calling module by address.
@@ -1171,20 +1181,21 @@ void GetFormattedMessage(DWORD last_error)
 //
 //    Module handle.
 //
-HMODULE GetCallingModule( UINT_PTR pCaller )
-{
-    HMODULE hModule = NULL;
-    MEMORY_BASIC_INFORMATION mbi;
-    if ( VirtualQuery((LPCVOID)pCaller, &mbi, sizeof(MEMORY_BASIC_INFORMATION)) == sizeof(MEMORY_BASIC_INFORMATION) )
-    {
-        // the allocation base is the beginning of a PE file
-        hModule = (HMODULE) mbi.AllocationBase;
-    }
-    return hModule;
+HMODULE GetCallingModule(UINT_PTR pCaller) {
+  HMODULE hModule = NULL;
+  MEMORY_BASIC_INFORMATION mbi;
+  if (VirtualQuery((LPCVOID)pCaller, &mbi, sizeof(MEMORY_BASIC_INFORMATION)) ==
+      sizeof(MEMORY_BASIC_INFORMATION)) {
+    // the allocation base is the beginning of a PE file
+    hModule = (HMODULE)mbi.AllocationBase;
+  }
+  return hModule;
 }
 
-// LoadBoolOption - Loads specified option from environment variables or from specified ini file,
-//   if env var is unavailable and converts string values (e.g. "yes", "no", "on", "off") to boolean values.
+// LoadBoolOption - Loads specified option from environment variables or from
+// specified ini file,
+//   if env var is unavailable and converts string values (e.g. "yes", "no",
+//   "on", "off") to boolean values.
 //
 //  - optionname (IN): Option to load.
 //
@@ -1197,22 +1208,23 @@ HMODULE GetCallingModule( UINT_PTR pCaller )
 //    Returns TRUE if the string is recognized as a "true" string. Otherwise
 //    returns FALSE.
 //
-BOOL LoadBoolOption(LPCWSTR optionname, LPCWSTR defaultvalue, LPCWSTR inipath)
-{
-    const UINT buffersize = 64;
-    WCHAR buffer[buffersize] = { 0 };
+BOOL LoadBoolOption(LPCWSTR optionname, LPCWSTR defaultvalue, LPCWSTR inipath) {
+  const UINT buffersize = 64;
+  WCHAR buffer[buffersize] = {0};
 
-    WCHAR envirinmentoptionname[buffersize] = L"Vld";
-    wcscat_s(envirinmentoptionname, buffersize, optionname);
+  WCHAR envirinmentoptionname[buffersize] = L"Vld";
+  wcscat_s(envirinmentoptionname, buffersize, optionname);
 
-    if (!GetEnvironmentVariable(envirinmentoptionname, buffer, buffersize)) {
-        GetPrivateProfileString(L"Options", optionname, defaultvalue, buffer, buffersize, inipath);
-    }
+  if (!GetEnvironmentVariable(envirinmentoptionname, buffer, buffersize)) {
+    GetPrivateProfileString(L"Options", optionname, defaultvalue, buffer,
+                            buffersize, inipath);
+  }
 
-    return StrToBool(buffer);
+  return StrToBool(buffer);
 }
 
-// LoadIntOption - Loads specified option from environment variables or from specified ini file,
+// LoadIntOption - Loads specified option from environment variables or from
+// specified ini file,
 //   if env var is unavailable.
 //
 //  - optionname (IN): Option to load
@@ -1225,22 +1237,22 @@ BOOL LoadBoolOption(LPCWSTR optionname, LPCWSTR defaultvalue, LPCWSTR inipath)
 //
 //    Returns integer representation of optionname's value.
 //
-UINT LoadIntOption(LPCWSTR optionname, UINT defaultvalue, LPCWSTR inipath)
-{
-    const UINT buffersize = 64;
-    WCHAR buffer[buffersize] = { 0 };
+UINT LoadIntOption(LPCWSTR optionname, UINT defaultvalue, LPCWSTR inipath) {
+  const UINT buffersize = 64;
+  WCHAR buffer[buffersize] = {0};
 
-    WCHAR envirinmentoptionname[buffersize] = L"Vld";
-    wcscat_s(envirinmentoptionname, buffersize, optionname);
+  WCHAR envirinmentoptionname[buffersize] = L"Vld";
+  wcscat_s(envirinmentoptionname, buffersize, optionname);
 
-    if (!GetEnvironmentVariable(envirinmentoptionname, buffer, buffersize)) {
-        return GetPrivateProfileInt(L"Options", optionname, defaultvalue, inipath);
-    }
+  if (!GetEnvironmentVariable(envirinmentoptionname, buffer, buffersize)) {
+    return GetPrivateProfileInt(L"Options", optionname, defaultvalue, inipath);
+  }
 
-    return _tstoi(buffer);
+  return _tstoi(buffer);
 }
 
-// LoadStringOption - Loads specified option from environment variables or from specified ini file,
+// LoadStringOption - Loads specified option from environment variables or from
+// specified ini file,
 //   if env var is unavailable.
 //
 //  - optionname (IN): Option to load.
@@ -1255,13 +1267,15 @@ UINT LoadIntOption(LPCWSTR optionname, UINT defaultvalue, LPCWSTR inipath)
 //
 //    None.
 //
-VOID LoadStringOption(LPCWSTR optionname, LPWSTR outputbuffer, UINT buffersize, LPCWSTR inipath)
-{
-    const UINT namebuffersize = 64;
-    WCHAR envirinmentoptionname[namebuffersize] = L"Vld";
-    wcscat_s(envirinmentoptionname, namebuffersize, optionname);
+VOID LoadStringOption(LPCWSTR optionname, LPWSTR outputbuffer, UINT buffersize,
+                      LPCWSTR inipath) {
+  const UINT namebuffersize = 64;
+  WCHAR envirinmentoptionname[namebuffersize] = L"Vld";
+  wcscat_s(envirinmentoptionname, namebuffersize, optionname);
 
-    if (!GetEnvironmentVariable(envirinmentoptionname, outputbuffer, buffersize)) {
-        GetPrivateProfileString(L"Options", optionname, L"", outputbuffer, buffersize, inipath);
-    }
+  if (!GetEnvironmentVariable(envirinmentoptionname, outputbuffer,
+                              buffersize)) {
+    GetPrivateProfileString(L"Options", optionname, L"", outputbuffer,
+                            buffersize, inipath);
+  }
 }
